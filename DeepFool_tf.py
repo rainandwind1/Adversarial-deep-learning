@@ -3,8 +3,11 @@ from tensorflow import keras
 from tensorflow.keras import layers, optimizers, losses, datasets
 import matplotlib.pyplot as plt
 import numpy as np
+import copy
 
-
+# 绘图中文显示设置
+plt.rcParams['font.sans-serif']=['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 
 # 数据加载和预处理
 (train_data, train_label), (test_data, test_label) = datasets.mnist.load_data()
@@ -86,15 +89,83 @@ for data in test_db:
 print('准确率为：{}'.format(total_right / test_data.shape[0]))
 
 
-index = 100
+index = 88
 ad_example, ad_label = test_data[index], test_label[index]
 
 figure1 = plt.figure()
 plt.imshow(ad_example)
 
+
 img = tf.cast(tf.reshape(ad_example, [-1,28*28]), tf.float32)
 img = tf.Variable(img, name = 'ad_example')
 
+
+###############################################################
+# 按照样本类边界距离排序类结果
+f_image = net(img).numpy().flatten()
+I = (np.array(f_image)).flatten().argsort()[::-1]
+label = I[0]  # 预测结果
+
+
+input_shape = img.numpy().shape
+pert_image = copy.deepcopy(img)
+w = np.zeros(input_shape)
+r_tot = np.zeros(input_shape)
+
+loop_i = 0
+max_iter = 50
+overshoot = 0.
+with tf.GradientTape(persistent=True) as tape:
+    x = tf.Variable(pert_image, name='input_img')
+    tape.watch(x)
+    fs = net(x)
+    fs_list = [fs[0][I[k]] for k in range(len(I))]
+    k_i = label
+
+
+# 迭代移动样本最终产生对抗样本
+while k_i == label and loop_i < max_iter:
+    pert = np.inf
+    grads = tape.gradient(fs_list[0], x)
+    orig_grad = grads.numpy().copy()
+    for k in range(len(I)):
+        grads = tape.gradient(fs_list[k], x)
+        cur_grad = grads.numpy().copy()
+
+        # 求样本到类边界距离
+        w_k = cur_grad - orig_grad
+        f_k = (fs[0][I[k]] - fs[0][I[0]]).numpy()
+
+        pert_k = abs(f_k) / np.linalg.norm(w_k.flatten())
+
+        if pert_k < pert:
+            pert = pert_k
+            w = w_k
+
+    # 累积移动
+    r_i = (pert + 1e-4)*w / np.linalg.norm(w)
+    r_tot = np.float32(r_tot + r_i)
+
+    # 计算移动之后的样本，看是否有效, 更新迭代状态变量
+    pert_image = img + (1 + overshoot)*tf.constant(r_tot)
+    with tf.GradientTape(persistent=True) as tape:
+        x = tf.Variable(pert_image)
+        fs = net(x)
+        fs_list = [fs[0][I[k]] for k in range(len(I))]
+        k_i = np.argmax(fs.numpy().flatten())
+    loop_i += 1
+
+r_tot = (1 + overshoot) * r_tot
+
+outputs = net(pert_image)
+pred = tf.argmax(outputs)
+print("原样本预测为：{}  对抗样本预测为：{}".format(I[0], pred.numpy()[0]))
+
+pert_image = tf.reshape(pert_image,(28,28))
+fig2 = plt.figure()
+plt.title('对抗样本')
+plt.imshow(pert_image.numpy())
+plt.show()
 
 
 

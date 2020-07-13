@@ -15,6 +15,7 @@ import numpy as np
 #     x = tf.constant(x, dtype = tf.float32)
 #     y = tf.constant(y, dtype = tf.float32)
 #     return x, y
+
 def preprocess(x, y): # 自定义的预处理函数
     # 调用此函数时会自动传入x,y 对象，shape 为[b, 28, 28], [b]
     # 标准化到0~1
