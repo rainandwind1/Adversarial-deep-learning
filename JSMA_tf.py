@@ -35,30 +35,12 @@ class Net(keras.Model):
 
 
 
-
-PATH = './param/FGSM_tf.ckpt'
-net = Net()
-net.load_weights(PATH)
-
-(train_data, train_label), (test_data, test_label) = datasets.mnist.load_data()
-
-
 def preprocess(x, y):
     x = tf.cast(x, dtype = tf.float32)
     x = tf.reshape(x, [-1, 28*28])
     y = tf.cast(y, dtype=tf.int32)
     y = tf.one_hot(y, depth=10)
     return x, y
-
-train_db = tf.data.Dataset.from_tensor_slices((train_data, train_label))
-train_db.shuffle(10000).batch(256).map(preprocess)
-
-test_db = tf.data.Dataset.from_tensor_slices((test_data, test_label))
-test_db.shuffle(10000).batch(256).map(preprocess)
-
-index = 10
-init_exp = train_data[index]        # 原始图像
-x, label = preprocess(train_data[index], train_label[index])
 
 
 # print(net(x))
@@ -84,10 +66,10 @@ def compute_jacobian(model, inputs):
 
 def saliency_map(jacobian, target_index, increasing, search_space, nb_features):
 
-    domain = tf.equal(search_space, 1)
+    domain = tf.equal(search_space, True)
     domain = tf.cast(domain, dtype=tf.float32)
     all_sum = tf.reduce_sum(jacobian, axis=0, keepdims=True)
-    target_grad = jacobian[target_index]
+    target_grad = jacobian[target_index.numpy()[0]]
     other_grad = all_sum - target_grad
 
     # 剔除不在搜索领域里的点
@@ -101,7 +83,7 @@ def saliency_map(jacobian, target_index, increasing, search_space, nb_features):
     # 计算 alpha  beta
     # 计算任意两个特征的目标前向梯度分量
     target_tmp = tf.tile(target_grad, [1 for i in range(len(target_grad.shape))])
-    target_tmp -= increasing_coef * tf.maximum(tf.abs(target_grad))
+    target_tmp -= increasing_coef * tf.reduce_max(tf.abs(target_grad))
     alpha = tf.reshape(target_tmp, [-1, 1, nb_features]) + tf.reshape(target_tmp, [-1, nb_features, 1])
 
     # 计算除目标类外的梯度分量之和
@@ -112,7 +94,7 @@ def saliency_map(jacobian, target_index, increasing, search_space, nb_features):
     # alpha  beta组合成一个table  接下来寻找最大的特征对，注意自己和自己的组合需要排除在外
     tmp = np.ones((nb_features, nb_features), int)
     np.fill_diagonal(tmp, 0)
-    zero_diagonal = tf.constant(tmp, dtype=tf.int32)
+    zero_diagonal = tf.constant(tmp, dtype=tf.float32)
 
     # 得出显著性图谱
     if increasing:
@@ -123,12 +105,14 @@ def saliency_map(jacobian, target_index, increasing, search_space, nb_features):
         mask2 = tf.greater(beta, 0.0)
 
     # 将mask应用到显著性图上
+    mask1 = tf.cast(mask1, dtype=tf.float32)
+    mask2 = tf.cast(mask2, dtype=tf.float32)
     mask = tf.multiply(tf.multiply(mask1, mask2), tf.reshape(zero_diagonal, mask1.shape))
     saliency_map = tf.multiply(tf.multiply(alpha, tf.abs(beta)), tf.cast(mask, dtype = tf.float32))
     max_value = tf.reduce_max(tf.reshape(saliency_map, [-1, nb_features * nb_features]))
-    max_idx = tf.argmax(tf.reshape(saliency_map, [-1, nb_features * nb_features]))
-    p = max_idx // nb_features
-    q = max_idx % nb_features
+    max_idx = tf.argmax(tf.reshape(saliency_map, [-1, nb_features * nb_features]), 1)
+    p = max_idx.numpy()[0] // nb_features
+    q = max_idx.numpy()[0] % nb_features
     return p, q
 
 
@@ -178,14 +162,17 @@ def perturbation_single(image, ys_target, theta, gamma, model):
 
         new_example = tf.clip_by_value(var_sample_flatten, 0.0, 1.0)
         new_example = tf.reshape(new_example, shape)
+        # search_domain = search_domain.numpy()
         search_domain = search_domain.numpy()
-        search_domain[p1] = 0
-        search_domain[p2] = 0
+        search_domain[p1] = False
+        search_domain[p2] = False
+        search_domain = tf.constant(search_domain)
         var_sample = tf.Variable(tf.constant(new_example))
 
         output = model(var_sample)
-        current = tf.reduce_max(outputs, 1).numpy()
+        current = tf.argmax(outputs, 1).numpy()
         iter += 1
+    print(iter, max_iters)
     adv_samples = var_sample.numpy()
     return adv_samples, current
 
@@ -194,12 +181,22 @@ if __name__ == '__main__':
 
     net = Net()
     net.load_weights(PATH)
+    (train_data, train_label), (test_data, test_label) = datasets.mnist.load_data()
 
-    index = 10
+    train_db = tf.data.Dataset.from_tensor_slices((train_data, train_label))
+    train_db.shuffle(10000).batch(256).map(preprocess)
+
+    test_db = tf.data.Dataset.from_tensor_slices((test_data, test_label))
+    test_db.shuffle(10000).batch(256).map(preprocess)
+
+    index = 50
+    init_exp = train_data[index]  # 原始图像
+    x, label = preprocess(train_data[index], train_label[index])
+
     image = x.numpy()
     label = train_label[index]
 
-    theta = 1.0 # 扰动值
+    theta = 1 # 扰动值
     gamma = 0.1 # 最多扰动特征数占总特征数量的比例
     ys_target = 2
 
@@ -215,8 +212,8 @@ if __name__ == '__main__':
     plt.title("JSMA对抗样本")
     plt.imshow(im)
 
-    init_pred = tf.reduce_max(net(x)).numpy()
-    print('原样本预测为：{}  JSMA算法扰动后预测为：{}'.format(init_pred, adv_pred.numpy()))
+    init_pred = tf.argmax(net(x), 1).numpy()
+    print('原样本预测为：{}  JSMA算法扰动后预测为：{}'.format(init_pred[0], adv_pred[0]))
     plt.show()
 
 

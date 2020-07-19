@@ -56,6 +56,7 @@ def saliency_map(jacobian, target_index, increasing, search_space, nb_features):
 
     domain = torch.eq(search_space, 1).float()
     all_sum = torch.sum(jacobian, dim=0, keepdim=True) # 按照列求和得到的是输出对每个像素点的总的梯度值
+    print(target_index)
     target_grad = jacobian[target_index] # 得到的是目标输出分量对输入像素点的梯度分量
     others_grad = all_sum - target_grad
 
@@ -88,6 +89,7 @@ def saliency_map(jacobian, target_index, increasing, search_space, nb_features):
     else:
         mask1 = torch.lt(alpha, 0.0)
         mask2 = torch.gt(beta, 0.0)
+
 
     # 将mask应用到显著性图上
     mask = torch.mul(torch.mul(mask1, mask2), zero_diagonal.view_as(mask1))
